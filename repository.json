@@ -1,0 +1,8 @@
+{
+	"name": "Modified from HA Korean Community Addon",
+	"url": "https://github.com/JeongTaehun/addons",
+	"version": "1.0.1",
+	"slug": "navien_wallpad",
+	"description": "Navien Wallpad Controller for Home Assistant",
+	"maintainer": "Taehun Jeong"
+}
