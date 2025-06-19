@@ -1,3 +1,5 @@
+import json
+import os
 from typing import Dict, Any
 from wallpad import Wallpad
 
@@ -5,8 +7,16 @@ from wallpad import Wallpad
 class DeviceRegistry:
     """Registry for configuring and registering all devices."""
     
-    def __init__(self, wallpad: Wallpad):
+    def __init__(self, wallpad: Wallpad, config_path: str = None):
         self.wallpad = wallpad
+        if config_path is None:
+            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+        
+        with open(config_path, 'r', encoding='utf-8') as f:
+            self.config = json.load(f)
+        
+        self.devices_config = self.config.get('devices', {})
+        self.room_templates = self.config.get('room_templates', {})
         self._packet_mappings = {
             'percentage': {'00': '0', '01': '1', '02': '2', '03': '3'},
             'oscillation': {'03': 'oscillate_on', '00': 'oscillation_off', '01': 'oscillate_off'}
@@ -40,28 +50,67 @@ class DeviceRegistry:
         except (ValueError, TypeError):
             return '01'
     
+    def _generate_child_devices(self, config: Dict[str, Any]) -> tuple:
+        """Generate child devices and control IDs based on room configuration."""
+        room_config = config.get('room_config', {})
+        
+        if not room_config.get('enabled', False):
+            return [], []
+        
+        # Use auto-generation if enabled
+        if room_config.get('auto_generate', {}).get('enabled', False):
+            auto_config = room_config['auto_generate']
+            count = auto_config.get('count', 1)
+            name_template = auto_config.get('name_template', '장치{index}')
+            control_id_start = auto_config.get('control_id_start', '11')
+            
+            child_devices = []
+            control_ids = []
+            
+            for i in range(1, count + 1):
+                device_name = name_template.format(index=i)
+                child_devices.append(device_name)
+                
+                # Generate control ID (increment hex value)
+                base_id = int(control_id_start, 16)
+                control_id = hex(base_id + i - 1)[2:].zfill(2)
+                control_ids.append(control_id)
+            
+            return child_devices, control_ids
+        
+        # Use manual room configuration
+        rooms = room_config.get('rooms', [])
+        child_devices = [room['name'] for room in rooms]
+        control_ids = [room['control_id'] for room in rooms]
+        
+        return child_devices, control_ids
+    
     def register_all_devices(self) -> None:
         """Register all known devices with the wallpad."""
-        self._register_heat_exchanger()
-        self._register_gas_valve()
-        self._register_lights()
-        self._register_heating()
-        self._register_elevator()
+        for device_key, device_config in self.devices_config.items():
+            if device_key == 'heat_exchanger':
+                self._register_heat_exchanger(device_config)
+            elif device_key == 'gas_valve':
+                self._register_gas_valve(device_config)
+            elif device_key == 'lights':
+                self._register_lights(device_config)
+            elif device_key == 'heating':
+                self._register_heating(device_config)
+            elif device_key == 'elevator':
+                self._register_elevator(device_config)
     
-    def _register_heat_exchanger(self) -> None:
+    def _register_heat_exchanger(self, config: Dict[str, Any]) -> None:
         """Register heat exchanger (전열교환기) device."""
-        optional_info = {
-            'optimistic': 'false',
-            'speed_range_min': 1,
-            'speed_range_max': 3
-        }
+        # Update packet mappings from config if available
+        if 'packet_mappings' in config:
+            self._packet_mappings.update(config['packet_mappings'])
         
         device = self.wallpad.add_device(
-            device_name='전열교환기',
-            device_id='32',
-            device_subid='01',
-            device_class='fan',
-            optional_info=optional_info
+            device_name=config['name'],
+            device_id=config['id'],
+            device_subid=config['subid'],
+            device_class=config['class'],
+            optional_info=config.get('optional_info', {})
         )
         
         # Status messages
@@ -104,16 +153,14 @@ class DeviceRegistry:
             process_func=self._convert_percentage_to_hex
         )
     
-    def _register_gas_valve(self) -> None:
+    def _register_gas_valve(self, config: Dict[str, Any]) -> None:
         """Register gas valve (가스) device."""
-        optional_info = {'optimistic': 'false'}
-        
         device = self.wallpad.add_device(
-            device_name='가스',
-            device_id='12',
-            device_subid='01',
-            device_class='switch',
-            optional_info=optional_info
+            device_name=config['name'],
+            device_id=config['id'],
+            device_subid=config['subid'],
+            device_class=config['class'],
+            optional_info=config.get('optional_info', {})
         )
         
         device.register_status(
@@ -139,17 +186,17 @@ class DeviceRegistry:
             process_func=lambda v: '00' if v == 'ON' else '04'
         )
     
-    def _register_lights(self) -> None:
+    def _register_lights(self, config: Dict[str, Any]) -> None:
         """Register lighting (조명) devices."""
-        optional_info = {'optimistic': 'false'}
+        child_devices, control_ids = self._generate_child_devices(config)
         
         device = self.wallpad.add_device(
-            device_name='조명',
-            device_id='0e',
-            device_subid='1f',
-            child_devices=["거실1", "거실2"],
-            device_class='light',
-            optional_info=optional_info
+            device_name=config['name'],
+            device_id=config['id'],
+            device_subid=config['subid'],
+            child_devices=child_devices,
+            device_class=config['class'],
+            optional_info=config.get('optional_info', {})
         )
         
         device.register_status(
@@ -164,28 +211,21 @@ class DeviceRegistry:
             message_flag='41',
             attr_name='power',
             topic_class='command_topic',
-            controll_id=['11', '12'],
+            controll_id=control_ids if control_ids else ['11', '12'],
             process_func=lambda v: '01' if v == 'ON' else '00'
         )
     
-    def _register_heating(self) -> None:
+    def _register_heating(self, config: Dict[str, Any]) -> None:
         """Register heating (난방) devices."""
-        optional_info = {
-            'modes': ['off', 'heat'],
-            'temp_step': 1.0,
-            'precision': 1.0,
-            'min_temp': 10.0,
-            'max_temp': 40.0,
-            'send_if_off': 'false'
-        }
+        child_devices, control_ids = self._generate_child_devices(config)
         
         device = self.wallpad.add_device(
-            device_name='난방',
-            device_id='36',
-            device_subid='1f',
-            child_devices=["거실", "침실", "서재"],
-            device_class='climate',
-            optional_info=optional_info
+            device_name=config['name'],
+            device_id=config['id'],
+            device_subid=config['subid'],
+            child_devices=child_devices,
+            device_class=config['class'],
+            optional_info=config.get('optional_info', {})
         )
         
         # Status messages for different message flags
@@ -223,11 +263,12 @@ class DeviceRegistry:
             )
         
         # Command messages
+        default_control_ids = ['11', '12', '13']
         device.register_command(
             message_flag='43',
             attr_name='power',
             topic_class='mode_command_topic',
-            controll_id=['11', '12', '13'],
+            controll_id=control_ids if control_ids else default_control_ids,
             process_func=lambda v: '01' if v == 'heat' else '00'
         )
         
@@ -235,28 +276,26 @@ class DeviceRegistry:
             message_flag='44',
             attr_name='targettemp',
             topic_class='temperature_command_topic',
-            controll_id=['11', '12', '13'],
-            process_func=lambda v: hex(int(float(v)))[2:]
+            controll_id=control_ids if control_ids else default_control_ids,
+            process_func=lambda v: hex(int(float(v)))[2:].zfill(2)
         )
         
         device.register_command(
             message_flag='45',
             attr_name='away_mode',
             topic_class='away_mode_command_topic',
-            controll_id=['11', '12', '13'],
+            controll_id=control_ids if control_ids else default_control_ids,
             process_func=lambda v: '01' if v == 'ON' else '00'
         )
     
-    def _register_elevator(self) -> None:
+    def _register_elevator(self, config: Dict[str, Any]) -> None:
         """Register elevator (엘리베이터) device."""
-        optional_info = {'modes': ['down']}  # 기존과 동일하게 유지
-        
         device = self.wallpad.add_device(
-            device_name='엘리베이터',
-            device_id='33',
-            device_subid='01',
-            device_class='switch',  # 기존과 동일 (호환성)
-            optional_info=optional_info
+            device_name=config['name'],
+            device_id=config['id'],
+            device_subid=config['subid'],
+            device_class=config['class'],
+            optional_info=config.get('optional_info', {})
         )
         
         # 현재 층수 상태 (개선된 regex)

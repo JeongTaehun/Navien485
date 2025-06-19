@@ -1,8 +1,8 @@
 {
-	"name": "Modified from HA Korean Community Addon",
-	"url": "https://github.com/JeongTaehun/addons",
+	"name": "NavienRS485 - Navien Wallpad Controller",
+	"url": "https://github.com/your-username/NavienRS485",
 	"version": "1.0.1",
 	"slug": "navien_wallpad",
-	"description": "Navien Wallpad Controller for Home Assistant",
-	"maintainer": "Taehun Jeong"
+	"description": "Navien Wallpad Controller with RS485 Communication for Home Assistant",
+	"maintainer": "NavienRS485 Team"
 }
